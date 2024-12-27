@@ -1,150 +1,135 @@
 // index.js
 
-// -----------------------------
-// 1) 必要なパッケージをインポート
-// -----------------------------
+/***************************************************
+ * 1) 必要なモジュールをインポート
+ ***************************************************/
 const { Client, GatewayIntentBits } = require('discord.js');
 const express = require('express');
 
-// -----------------------------
-// 2) Discord Bot の初期化
-// -----------------------------
+/***************************************************
+ * 2) Railway の Variables から読み取る環境変数
+ *    - DISCORD_BOT_TOKEN
+ *    - TARGET_CHANNEL_ID (通知を送るチャンネル)
+ *    - PORT (HTTPサーバー用、Railwayが自動設定する場合も)
+ ***************************************************/
+const token = process.env.DISCORD_BOT_TOKEN;
+const targetChannelId = process.env.TARGET_CHANNEL_ID;
+const port = process.env.PORT || 3000;
+
+/***************************************************
+ * 3) 24時間監視用の設定値
+ ***************************************************/
+// LoLのアクティビティ名
+const LOL_GAME_NAME = 'League of Legends';
+
+// 1時間ごとにチェック
+const CHECK_INTERVAL_HOURS = 1;
+
+// 24時間起動してなかったら通知
+const INACTIVE_LIMIT_HOURS = 24;
+
+/***************************************************
+ * 4) ユーザーが最後にLoLを起動した時刻を保持するMap
+ *    key: userId, value: Date(最後にLoLを開始した時間)
+ ***************************************************/
+const lastPlayTimeMap = new Map();
+
+/***************************************************
+ * 5) Discordクライアントの作成
+ ***************************************************/
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildPresences,    // presenceUpdateに必要
+    GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent
   ]
 });
 
-// -----------------------------
-// 3) Botが起動したときに実行される処理
-// -----------------------------
+/***************************************************
+ * 6) Bot起動時
+ ***************************************************/
 client.once('ready', () => {
   console.log(`Bot logged in as ${client.user.tag}`);
-});
 
-// -----------------------------
-// 4) Discord Botのログイン
-//    → Railway Variables に設定したトークンを参照
-// -----------------------------
-client.login(process.env.DISCORD_BOT_TOKEN);
-
-// -----------------------------------------------------------
-// 5) HTTPサーバー (任意)
-//    Railway で動かしているときにポートを空けておく例
-// -----------------------------------------------------------
-const app = express();
-app.get('/', (req, res) => {
-  res.send('Discord Bot is running!');
-});
-
-// Railway の環境変数に PORT が定義されていればそれを使い、
-// なければデフォルトで 3000 ポートを使う
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`HTTP server running on port ${PORT}`);
-});
-
-
-// ゲーム名（言語環境に応じて調整）
-const LOL_GAME_NAME = 'League of Legends';
-
-// 監視に関する設定
-const CHECK_INTERVAL_HOURS = 1;    // 監視間隔 (1時間ごと)
-const INACTIVE_LIMIT_HOURS = 24;   // 24時間起動していない場合に通知
-
-// -----------------------------
-// Discordクライアントを初期化
-// -----------------------------
-const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildPresences,
-    GatewayIntentBits.GuildMembers,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent,
-  ]
-});
-
-// -----------------------------
-// ユーザーが最後にLoLを起動した時刻を記録するMap
-//   key: userId
-//   value: Date (LoLを起動した瞬間の時刻)
-// -----------------------------
-const lastPlayTimeMap = new Map();
-
-// -----------------------------
-// Botが起動したとき
-// -----------------------------
-client.once('ready', () => {
-  console.log(`Botがログインしました: ${client.user.tag}`);
-
-  // 1時間ごとにチェックするタイマーをセット
+  // Botが起動したら、1時間ごとに「24時間プレイなしユーザー」をチェックする
   const intervalMs = CHECK_INTERVAL_HOURS * 60 * 60 * 1000;
   setInterval(checkInactiveUsers, intervalMs);
 });
 
-// -----------------------------
-// presenceUpdateイベント
-//   ユーザーのアクティビティが更新されるたび呼ばれる
-// -----------------------------
+/***************************************************
+ * 7) presenceUpdateイベント
+ *    - ユーザーのアクティビティが更新されるたびに呼ばれる
+ *    - LoLプレイ開始時刻を記録する
+ ***************************************************/
 client.on('presenceUpdate', (oldPresence, newPresence) => {
-  if (!newPresence || !newPresence.user) return; // nullチェック
+  if (!newPresence || !newPresence.user) return; // 念のため
   if (newPresence.user.bot) return;             // Botは無視
 
-  // 新ステータスでLoLをプレイしているか？
+  // 新ステータスでLoLをプレイしているかどうか
   const isPlayingLoL = newPresence.activities.some(
     (activity) => activity.type === 0 && activity.name === LOL_GAME_NAME
   );
 
-  // LoLをプレイしているなら、"最後にLoLを起動した時刻"を更新する
+  // LoLをプレイしているなら、lastPlayTimeMapに「今の時刻」を記録
   if (isPlayingLoL) {
     lastPlayTimeMap.set(newPresence.user.id, new Date());
   }
 });
 
-// -----------------------------
-// 1時間ごとに呼ばれるチェック関数
-// -----------------------------
+/***************************************************
+ * 8) 1時間ごとに呼ばれる関数: checkInactiveUsers
+ *    - 24時間LoLを起動していないユーザーに通知
+ ***************************************************/
 async function checkInactiveUsers() {
+  // 現在時刻
   const now = new Date();
 
+  // Map内の全ユーザーをチェック
   for (const [userId, lastPlayTime] of lastPlayTimeMap) {
+    // 経過時間を(時)で計算
     const diffMs = now - lastPlayTime;
     const diffHours = diffMs / (1000 * 60 * 60);
 
-    // 24時間(= INACTIVE_LIMIT_HOURS) プレイしていない場合に通知
+    // 24時間(= INACTIVE_LIMIT_HOURS) 越えていたら通知
     if (diffHours >= INACTIVE_LIMIT_HOURS) {
       try {
-        const channel = await client.channels.fetch(TARGET_CHANNEL_ID);
+        // 通知先チャンネルが設定されていない場合はスキップ
+        if (!targetChannelId) {
+          console.log('No TARGET_CHANNEL_ID set. Skipping.');
+          continue;
+        }
+
+        // 該当チャンネルを取得
+        const channel = await client.channels.fetch(targetChannelId);
         if (!channel) continue;
 
+        // ユーザーを探す
         const member = await findMemberById(userId);
         if (!member) continue;
 
-        // メンションつきで通知
+        // メンションで通知
         await channel.send({
-          content: `${member} もう24時間LOLを起動していません！ LOLしろ！`
+          content: `${member} さん、もう24時間LOLを起動していません！LOLしろ！`
         });
 
-        // 一度通知したらMapから削除して連続通知を防止
+        // 一度通知したらMapから削除して連続通知を防ぐ
         lastPlayTimeMap.delete(userId);
 
       } catch (err) {
-        console.error('通知エラー:', err);
+        console.error('checkInactiveUsers error:', err);
       }
     }
   }
 }
 
-// -----------------------------
-// ユーザーIDからGuildMemberを探すユーティリティ関数
-// (Botが参加している全てのGuildをチェック)
-// -----------------------------
+/***************************************************
+ * 9) ユーザーIDからGuildMemberを探すユーティリティ関数
+ *    (Botが参加している全サーバーから検索)
+ ***************************************************/
 async function findMemberById(userId) {
   for (const guild of client.guilds.cache.values()) {
-    // キャッシュ or API でメンバーを取得
     const member = guild.members.cache.get(userId)
       || await guild.members.fetch(userId).catch(() => null);
     if (member) return member;
@@ -152,12 +137,25 @@ async function findMemberById(userId) {
   return null;
 }
 
-// -----------------------------
-// Botにログイン
-// -----------------------------
-if (!DISCORD_BOT_TOKEN) {
-  console.error('ERROR: .env から DISCORD_BOT_TOKEN を読み込めませんでした。');
+/***************************************************
+ * 10) Botにログイン
+ *     (Railway Variables で設定したトークン)
+ ***************************************************/
+if (!token) {
+  console.error('DISCORD_BOT_TOKEN is not set. Please check Railway Variables.');
   process.exit(1);
 }
-client.login(DISCORD_BOT_TOKEN);
-require('./server.js');
+client.login(token);
+
+/***************************************************
+ * 11) Express サーバーを起動 (任意)
+ *     - Railway などでWebポートをListenし、常時稼働をサポート
+ ***************************************************/
+const app = express();
+app.get('/', (req, res) => {
+  res.send('Discord Bot is running!');
+});
+
+app.listen(port, () => {
+  console.log(`HTTP server running on port ${port}`);
+});
