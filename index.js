@@ -1,21 +1,51 @@
 // index.js
 
 // -----------------------------
-// .env の内容を読み込む
+// 1) 必要なパッケージをインポート
 // -----------------------------
-require('dotenv').config();
-
-const {
-  Client,
-  GatewayIntentBits
-} = require('discord.js');
+const { Client, GatewayIntentBits } = require('discord.js');
+const express = require('express');
 
 // -----------------------------
-// 必要な環境変数の取得
+// 2) Discord Bot の初期化
 // -----------------------------
-const DISCORD_BOT_TOKEN = process.env.DISCORD_BOT_TOKEN;       // Botトークン
-const TARGET_CHANNEL_ID = process.env.TARGET_CHANNEL_ID || '623556660417396736'; 
-  // 上記が空の場合はデフォルト値を使う例
+const client = new Client({
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent
+  ]
+});
+
+// -----------------------------
+// 3) Botが起動したときに実行される処理
+// -----------------------------
+client.once('ready', () => {
+  console.log(`Bot logged in as ${client.user.tag}`);
+});
+
+// -----------------------------
+// 4) Discord Botのログイン
+//    → Railway Variables に設定したトークンを参照
+// -----------------------------
+client.login(process.env.DISCORD_BOT_TOKEN);
+
+// -----------------------------------------------------------
+// 5) HTTPサーバー (任意)
+//    Railway で動かしているときにポートを空けておく例
+// -----------------------------------------------------------
+const app = express();
+app.get('/', (req, res) => {
+  res.send('Discord Bot is running!');
+});
+
+// Railway の環境変数に PORT が定義されていればそれを使い、
+// なければデフォルトで 3000 ポートを使う
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`HTTP server running on port ${PORT}`);
+});
+
 
 // ゲーム名（言語環境に応じて調整）
 const LOL_GAME_NAME = 'League of Legends';
