@@ -1,0 +1,17 @@
+{
+  "name": "my-discord-bot",
+  "version": "1.0.0",
+  "description": "Discord Bot project",
+  "main": "index.js",
+  "engines": {
+    "node": "18.x"
+  },
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "discord.js": "^14.16.3",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2"
+  }
+}
