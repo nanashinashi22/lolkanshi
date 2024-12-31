@@ -1,5 +1,5 @@
 {
-  "name": "my-discord-bot",
+  "name": "lolkanshi",
   "version": "1.0.0",
   "description": "Discord Bot + 24h LoL checker, running on Koyeb",
   "main": "index.js",
