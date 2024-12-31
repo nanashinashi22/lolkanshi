@@ -1,16 +1,16 @@
 // index.js
 
 /***************************************************
- * 1) 必要なモジュールをインポート
+ * 1) 必要なモジュールのインポート
  ***************************************************/
 const { Client, GatewayIntentBits } = require('discord.js');
 const express = require('express');
 
 /***************************************************
- * 2) Railway の Variables から読み取る環境変数
- *    - DISCORD_BOT_TOKEN
- *    - TARGET_CHANNEL_ID (通知を送るチャンネル)
- *    - PORT (HTTPサーバー用、Railwayが自動設定する場合も)
+ * 2) Koyeb の環境変数を読み込む
+ *    - DISCORD_BOT_TOKEN: Discord Botトークン
+ *    - TARGET_CHANNEL_ID: 通知を送るチャンネルID
+ *    - PORT: 任意 (なければ3000をデフォルト使用)
  ***************************************************/
 const token = process.env.DISCORD_BOT_TOKEN;
 const targetChannelId = process.env.TARGET_CHANNEL_ID;
@@ -30,7 +30,7 @@ const INACTIVE_LIMIT_HOURS = 24;
 
 /***************************************************
  * 4) ユーザーが最後にLoLを起動した時刻を保持するMap
- *    key: userId, value: Date(最後にLoLを開始した時間)
+ *    key: userId, value: Date(最後にLoLを開始した時刻)
  ***************************************************/
 const lastPlayTimeMap = new Map();
 
@@ -40,7 +40,7 @@ const lastPlayTimeMap = new Map();
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildPresences,    // presenceUpdateに必要
+    GatewayIntentBits.GuildPresences, // presenceUpdateに必要
     GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent
@@ -48,7 +48,7 @@ const client = new Client({
 });
 
 /***************************************************
- * 6) Bot起動時
+ * 6) Bot起動時に一度だけ呼ばれる処理
  ***************************************************/
 client.once('ready', () => {
   console.log(`Bot logged in as ${client.user.tag}`);
@@ -67,12 +67,12 @@ client.on('presenceUpdate', (oldPresence, newPresence) => {
   if (!newPresence || !newPresence.user) return; // 念のため
   if (newPresence.user.bot) return;             // Botは無視
 
-  // 新ステータスでLoLをプレイしているかどうか
+  // 新ステータスでLoLをプレイしているか
   const isPlayingLoL = newPresence.activities.some(
     (activity) => activity.type === 0 && activity.name === LOL_GAME_NAME
   );
 
-  // LoLをプレイしているなら、lastPlayTimeMapに「今の時刻」を記録
+  // LoLをプレイしていれば、lastPlayTimeMapに「現在時刻」を記録
   if (isPlayingLoL) {
     lastPlayTimeMap.set(newPresence.user.id, new Date());
   }
@@ -83,29 +83,25 @@ client.on('presenceUpdate', (oldPresence, newPresence) => {
  *    - 24時間LoLを起動していないユーザーに通知
  ***************************************************/
 async function checkInactiveUsers() {
-  // 現在時刻
   const now = new Date();
 
-  // Map内の全ユーザーをチェック
   for (const [userId, lastPlayTime] of lastPlayTimeMap) {
-    // 経過時間を(時)で計算
     const diffMs = now - lastPlayTime;
     const diffHours = diffMs / (1000 * 60 * 60);
 
-    // 24時間(= INACTIVE_LIMIT_HOURS) 越えていたら通知
     if (diffHours >= INACTIVE_LIMIT_HOURS) {
       try {
-        // 通知先チャンネルが設定されていない場合はスキップ
+        // 通知先チャンネルIDが未設定の場合はスキップ
         if (!targetChannelId) {
-          console.log('No TARGET_CHANNEL_ID set. Skipping.');
+          console.log('No TARGET_CHANNEL_ID set. Skipping notification.');
           continue;
         }
 
-        // 該当チャンネルを取得
+        // チャンネルを取得
         const channel = await client.channels.fetch(targetChannelId);
         if (!channel) continue;
 
-        // ユーザーを探す
+        // ユーザーを取得
         const member = await findMemberById(userId);
         if (!member) continue;
 
@@ -114,7 +110,7 @@ async function checkInactiveUsers() {
           content: `${member} さん、もう24時間LOLを起動していません！LOLしろ！`
         });
 
-        // 一度通知したらMapから削除して連続通知を防ぐ
+        // 一度通知したらMapから削除 (連続通知防止)
         lastPlayTimeMap.delete(userId);
 
       } catch (err) {
@@ -139,21 +135,20 @@ async function findMemberById(userId) {
 
 /***************************************************
  * 10) Botにログイン
- *     (Railway Variables で設定したトークン)
  ***************************************************/
 if (!token) {
-  console.error('DISCORD_BOT_TOKEN is not set. Please check Railway Variables.');
+  console.error('DISCORD_BOT_TOKEN is not set. Please check Koyeb Variables.');
   process.exit(1);
 }
 client.login(token);
 
 /***************************************************
  * 11) Express サーバーを起動 (任意)
- *     - Railway などでWebポートをListenし、常時稼働をサポート
+ *     - ポートをリッスンしておくとKoyebで安定稼働しやすい
  ***************************************************/
 const app = express();
 app.get('/', (req, res) => {
-  res.send('Discord Bot is running!');
+  res.send('Discord Bot is running on Koyeb!');
 });
 
 app.listen(port, () => {
