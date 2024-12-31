@@ -5,7 +5,7 @@
  ***********************************************************************/
 const { Client, GatewayIntentBits, Partials, PermissionsBitField } = require('discord.js');
 const express = require('express');
-const { getLastPlayTime } = require('./opgg');
+const { getLastPlayTime } = require('./riotapi'); // OP.GGからRiot APIへ変更
 const fs = require('fs');
 
 /***********************************************************************
@@ -82,15 +82,13 @@ client.on('messageCreate', async (message) => {
         if (args.length >= 2) {
             const mentionedUsers = message.mentions.users;
             if (mentionedUsers.size > 0) {
-                // 最初のメンションされたユーザーを対象とする
-                const mentionedUser = mentionedUsers.first();
-
                 // 他ユーザーの登録を制限（例: 管理者のみ）
                 if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
                     message.channel.send('他のユーザーのSummoner名を登録するには管理者権限が必要です。');
                     return;
                 }
 
+                const mentionedUser = mentionedUsers.first();
                 targetUserId = mentionedUser.id;
                 summonerName = args.slice(1).join(' ');
             } else {
@@ -109,6 +107,13 @@ client.on('messageCreate', async (message) => {
 
         if (!summonerName) {
             message.channel.send('Summoner名を指定してください。使用方法: !register @ユーザー <Summoner名> または !register <Summoner名>');
+            return;
+        }
+
+        // サモナーネームの検証（オプション）
+        const summoner = await getLastPlayTime(summonerName);
+        if (!summoner && summoner !== null) { // nullはプレイしていない場合
+            message.channel.send(`サモナーネーム「${summonerName}」が見つかりませんでした。正しい名前を入力してください。`);
             return;
         }
 
@@ -298,7 +303,7 @@ async function checkInactiveUsers() {
                 timeString += `${hours}時間`;
 
                 // メンションで通知
-                await channel.send(`${member} ー！明日サモリフこいよな！`);
+                await channel.send(`${member} さん、もう${INACTIVE_LIMIT_HOURS}時間LoLを起動していません！LOLしろ！`);
 
                 // 一度通知したらユーザーの記録を削除（連続通知を防止）
                 delete users[userId];
