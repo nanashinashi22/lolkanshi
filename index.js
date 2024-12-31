@@ -3,7 +3,7 @@
 /***************************************************
  * 1) 必要なモジュールのインポート
  ***************************************************/
-const { Client, GatewayIntentBits } = require('discord.js');
+const { Client, GatewayIntentBits, Partials, EmbedBuilder } = require('discord.js');
 const express = require('express');
 
 /***************************************************
@@ -24,14 +24,20 @@ const CHECK_INTERVAL_HOURS = 1;           // 監視間隔（時間）
 const INACTIVE_LIMIT_HOURS = 24;          // 通知を送る基準時間（時間）
 
 /***************************************************
- * 4) ユーザーが最後にLoLを起動した時刻を保持するMap
+ * 4) ボットの状態管理
+ ***************************************************/
+let isActive = true;                      // ボットの監視機能が有効かどうか
+let monitorInterval = null;               // 監視のインターバルID
+
+/***************************************************
+ * 5) ユーザーが最後にLoLを起動した時刻を保持するMap
  *    - key: userId
  *    - value: Dateオブジェクト（最後にLoLを開始した時間）
  ***************************************************/
 const lastPlayTimeMap = new Map();
 
 /***************************************************
- * 5) Discordクライアントの作成
+ * 6) Discordクライアントの作成
  ***************************************************/
 const client = new Client({
   intents: [
@@ -40,26 +46,27 @@ const client = new Client({
     GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent
-  ]
+  ],
+  partials: [Partials.Channel]            // 必要に応じてパーシャルを追加
 });
 
 /***************************************************
- * 6) Botが起動したときに一度だけ呼ばれる処理
+ * 7) Botが起動したときに一度だけ呼ばれる処理
  ***************************************************/
 client.once('ready', () => {
   console.log(`Bot logged in as ${client.user.tag}`);
 
   // 監視タスクの開始
-  const intervalMs = CHECK_INTERVAL_HOURS * 60 * 60 * 1000;
-  setInterval(checkInactiveUsers, intervalMs);
+  startMonitoring();
 });
 
 /***************************************************
- * 7) presenceUpdate イベントハンドラ
+ * 8) presenceUpdate イベントハンドラ
  *    - ユーザーのアクティビティが更新されるたびに呼ばれる
  *    - LoLをプレイ開始した時刻を記録
  ***************************************************/
 client.on('presenceUpdate', (oldPresence, newPresence) => {
+  if (!isActive) return;                   // 監視が無効な場合は処理しない
   if (!newPresence || !newPresence.user) return; // 安全チェック
   if (newPresence.user.bot) return;             // Botは無視
 
@@ -75,8 +82,101 @@ client.on('presenceUpdate', (oldPresence, newPresence) => {
 });
 
 /***************************************************
- * 8) 1時間ごとに呼ばれる関数: checkInactiveUsers
- *    - 24時間LoLを起動していないユーザーに通知
+ * 9) メッセージの処理
+ *    - ボットへのメンションとコマンドの確認
+ ***************************************************/
+client.on('messageCreate', async (message) => {
+  if (message.author.bot) return;          // Botからのメッセージは無視
+
+  // ボットへのメンションが含まれているか確認
+  const mentioned = message.mentions.has(client.user);
+  if (!mentioned) return;
+
+  // メッセージ内容を取得し、コマンドを解析
+  const args = message.content.split(' ').slice(1); // メンション部分を除く
+  const command = args[0]?.toLowerCase();
+
+  if (command === 'login') {
+    if (isActive) {
+      message.channel.send('既に監視機能は有効です。');
+    } else {
+      isActive = true;
+      startMonitoring();
+      message.channel.send('ピピーッ❗️🔔⚡️LOL脱走兵監視botです❗️👊👮❗️');
+    }
+  } else if (command === 'logout') {
+    if (!isActive) {
+      message.channel.send('既に監視機能は無効です。');
+    } else {
+      isActive = false;
+      stopMonitoring();
+      message.channel.send('監視機能をオフにしました。');
+    }
+  } else if (command === '!') {
+    // 新しいコマンド処理: ! @ユーザー
+    const userMention = args[1]; // メンションされたユーザー
+    if (!userMention) {
+      message.channel.send('ユーザーをメンションしてください。例: @BotName ! @User1');
+      return;
+    }
+
+    // ユーザーIDの抽出
+    const userIdMatch = userMention.match(/^<@!?(\d+)>$/);
+    if (!userIdMatch) {
+      message.channel.send('有効なユーザーをメンションしてください。');
+      return;
+    }
+    const userId = userIdMatch[1];
+
+    // ユーザー情報の取得
+    const member = await findMemberById(userId);
+    if (!member) {
+      message.channel.send('指定されたユーザーが見つかりません。');
+      return;
+    }
+
+    // 最後のLoL起動時刻の取得
+    const lastPlayTime = lastPlayTimeMap.get(userId);
+    if (!lastPlayTime) {
+      message.channel.send(`${member} さんは、まだLoLをプレイしていません。`);
+      return;
+    }
+
+    // 現在時刻と最後のプレイ時刻の差を計算
+    const now = new Date();
+    const diffMs = now - lastPlayTime;
+    const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+
+    message.channel.send(`${member} さんは、最後にLoLを起動してから **${diffHours} 時間** 経過しています。`);
+  } else {
+    message.channel.send('認識できないコマンドです。「login」、「logout」、または「! @ユーザー」を使用してください。');
+  }
+});
+
+/***************************************************
+ * 10) 監視タスクの開始
+ ***************************************************/
+function startMonitoring() {
+  if (monitorInterval) return;            // 既に監視が開始されている場合はスキップ
+
+  monitorInterval = setInterval(checkInactiveUsers, CHECK_INTERVAL_HOURS * 60 * 60 * 1000);
+  console.log('監視機能が有効になりました。');
+}
+
+/***************************************************
+ * 11) 監視タスクの停止
+ ***************************************************/
+function stopMonitoring() {
+  if (monitorInterval) {
+    clearInterval(monitorInterval);
+    monitorInterval = null;
+    console.log('監視機能が無効になりました。');
+  }
+}
+
+/***************************************************
+ * 12) 1時間ごとに呼ばれる関数: checkInactiveUsers
+ *     - 24時間LoLを起動していないユーザーに通知
  ***************************************************/
 async function checkInactiveUsers() {
   const now = new Date();
@@ -109,7 +209,7 @@ async function checkInactiveUsers() {
 
         // メンションで通知
         await channel.send({
-          content: `${member} LOLから逃げるな。`
+          content: `${member} LOLから逃げるな`
         });
 
         // 一度通知したらMapから削除して連続通知を防止
@@ -123,7 +223,7 @@ async function checkInactiveUsers() {
 }
 
 /***************************************************
- * 9) ユーザーIDからGuildMemberを探す関数
+ * 13) ユーザーIDからGuildMemberを探す関数
  ***************************************************/
 async function findMemberById(userId) {
   for (const guild of client.guilds.cache.values()) {
@@ -135,7 +235,7 @@ async function findMemberById(userId) {
 }
 
 /***************************************************
- * 10) Discord Bot にログイン
+ * 14) Discord Bot にログイン
  ***************************************************/
 if (!token) {
   console.error('DISCORD_BOT_TOKEN が設定されていません。環境変数を確認してください。');
@@ -144,7 +244,7 @@ if (!token) {
 client.login(token);
 
 /***************************************************
- * 11) Express サーバーを起動
+ * 15) Express サーバーを起動
  *     - Koyeb での安定稼働のために必要
  ***************************************************/
 const app = express();
