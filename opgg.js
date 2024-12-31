@@ -1,68 +1,55 @@
 // opgg.js
-
 const axios = require('axios');
 const cheerio = require('cheerio');
 
 /**
- * Summoner名から最後にLoLをプレイした日時を取得
- * @param {string} summonerName - Summoner名
- * @returns {Promise<Date|null>} - 最後のプレイ日時またはnull
+ * サモナー名から最後のプレイ時間を取得する関数
+ * @param {string} summonerName - サモナー名
+ * @returns {Date|null} - 最後のプレイ時間のDateオブジェクト、またはnull
  */
 async function getLastPlayTime(summonerName) {
     try {
-        const url = `https://www.op.gg/summoner/userName=${encodeURIComponent(summonerName)}`;
+        // OP.GGのURLを構築（リージョンに応じてURLを変更）
+        const url = `https://jp.op.gg/summoner/userName=${encodeURIComponent(summonerName)}`;
+        
+        // HTTPリクエストを送信
         const response = await axios.get(url, {
             headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
+                'User-Agent': 'Mozilla/5.0 (compatible; LOLBot/1.0)'
             }
         });
-
-        const $ = cheerio.load(response.data);
-
-        // LoLプレイ情報が存在するか確認
-        const lastPlayedText = $('.GameListItem.Item- ').first().find('.GameType').text();
-
-        if (!lastPlayedText) {
-            // プレイ履歴がない場合
+        
+        const html = response.data;
+        const $ = cheerio.load(html);
+        
+        // 最後のプレイ時間を含む要素を選択（セレクタはOP.GGの構造に依存）
+        // 例: 最近のプレイ時間が表示されている要素を特定
+        const lastPlayElement = $('.ProfileSummary .Content .LeagueStats .Row'); // 実際のセレクタを確認
+        
+        if (lastPlayElement.length === 0) {
+            console.log(`最後のプレイ時間が見つかりませんでした: ${summonerName}`);
             return null;
         }
-
-        // プレイ日時を解析
-        const lastPlayedElement = $('.GameListItem.Item- ').first().find('.Time');
-        const timeString = lastPlayedElement.text().trim();
-
-        // 時間表現をDateオブジェクトに変換
-        const lastPlayTime = parseTimeString(timeString);
-
-        return lastPlayTime;
+        
+        // テキストから日数や時間を抽出
+        const playText = lastPlayElement.text().trim();
+        // 例: "最後のプレイ: 2日前" など
+        const regex = /(\d+)\s*日\s*前/;
+        const match = playText.match(regex);
+        
+        if (match) {
+            const daysAgo = parseInt(match[1], 10);
+            const lastPlayDate = new Date();
+            lastPlayDate.setDate(lastPlayDate.getDate() - daysAgo);
+            return lastPlayDate;
+        } else {
+            console.log(`プレイ時間のフォーマットが不正です: ${playText}`);
+            return null;
+        }
     } catch (error) {
-        console.error(`Error fetching OP.GG data for ${summonerName}:`, error.message);
+        console.error(`OP.GGからデータを取得できませんでした: ${error.message}`);
         return null;
     }
-}
-
-/**
- * 時間表現の文字列をDateオブジェクトに変換
- * @param {string} timeStr - "X時間前"、"X日前" などの文字列
- * @returns {Date|null} - 変換後のDateオブジェクトまたはnull
- */
-function parseTimeString(timeStr) {
-    const now = new Date();
-    const regex = /(\d+)\s*(時間|日)/;
-    const match = timeStr.match(regex);
-
-    if (!match) return null;
-
-    const value = parseInt(match[1], 10);
-    const unit = match[2];
-
-    if (unit === '時間') {
-        return new Date(now.getTime() - value * 60 * 60 * 1000);
-    } else if (unit === '日') {
-        return new Date(now.getTime() - value * 24 * 60 * 60 * 1000);
-    }
-
-    return null;
 }
 
 module.exports = { getLastPlayTime };
