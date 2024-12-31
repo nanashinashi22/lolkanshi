@@ -67,13 +67,11 @@ client.once('ready', () => {
 client.on('messageCreate', async (message) => {
     if (message.author.bot) return; // Botからのメッセージは無視
 
-    // ボットへのメンションが含まれているか確認
-    const mentioned = message.mentions.has(client.user);
-    if (!mentioned) return;
+    const prefix = '!';
+    if (!message.content.startsWith(prefix)) return; // prefixで始まらないメッセージは無視
 
-    // メッセージ内容を取得し、コマンドを解析
-    const args = message.content.split(' ').slice(1); // メンション部分を除く
-    const command = args[0]?.toLowerCase();
+    const args = message.content.slice(prefix.length).trim().split(/ +/);
+    const command = args.shift().toLowerCase();
 
     if (command === 'register') {
         // ユーザー登録コマンド: !register @ユーザー <Summoner名>
@@ -87,7 +85,7 @@ client.on('messageCreate', async (message) => {
                 // 最初のメンションされたユーザーを対象とする
                 const mentionedUser = mentionedUsers.first();
 
-                // オプション: 他ユーザーの登録を制限（例: 管理者のみ）
+                // 他ユーザーの登録を制限（例: 管理者のみ）
                 if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
                     message.channel.send('他のユーザーのSummoner名を登録するには管理者権限が必要です。');
                     return;
@@ -152,7 +150,7 @@ client.on('messageCreate', async (message) => {
         // 最後のLoL起動時刻の取得
         const lastPlayTime = await getLastPlayTime(summonerName);
         if (!lastPlayTime) {
-            message.channel.send(`${targetUserId === message.author.id ? '' : `${message.mentions.users.first()} さんは、`}まだLoLをプレイしていません。`);
+            message.channel.send(`${targetUserId === message.author.id ? 'あなたは' : `${message.mentions.users.first()} さんは`},まだLoLをプレイしていません。`);
             return;
         }
 
@@ -300,7 +298,7 @@ async function checkInactiveUsers() {
                 timeString += `${hours}時間`;
 
                 // メンションで通知
-                await channel.send(`${member} LOLから逃げるな。サモリフを受け入れろ。`);
+                await channel.send(`${member} ー！明日サモリフこいよな！`);
 
                 // 一度通知したらユーザーの記録を削除（連続通知を防止）
                 delete users[userId];
