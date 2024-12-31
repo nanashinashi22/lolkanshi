@@ -109,7 +109,7 @@ async function checkInactiveUsers() {
 
         // メンションで通知
         await channel.send({
-          content: `${member} さん、もう24時間LOLを起動していません！LOLしろ！`
+          content: `${member} LOLから逃げるな。`
         });
 
         // 一度通知したらMapから削除して連続通知を防止
