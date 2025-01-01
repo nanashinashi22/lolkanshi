@@ -1,50 +1,30 @@
-// index.js (全文 example)
+// index.js
 
-/***********************************************************************
- * 1) 必要なモジュール
- ***********************************************************************/
-const { Client, GatewayIntentBits, Partials } = require('discord.js');
+/**
+ * NOTE:
+ * 1) .env は使わず、KoyebのEnv Varsを使用 (process.env.X)
+ * 2) riotapi.js のダミー関数をインポートして利用
+ */
+
+const { Client, GatewayIntentBits, Partials, PermissionsBitField } = require('discord.js');
 const express = require('express');
 const fs = require('fs');
 
-/** 
- * riotapi.js のようなファイルを使う場合は import:
- * const { validateRiotID, getLastPlayTime } = require('./riotapi');
- * 
- * ここではダミー実装にするか、まだ riotapi.js を読み込むかはお好みで。
- */
+const { validateRiotID, getLastPlayTimeFromRiotID } = require('./riotapi');
 
-/***********************************************************************
- * 2) 環境変数 (Koyeb内で設定)
- ***********************************************************************/
-const token = process.env.DISCORD_BOT_TOKEN; 
-const targetChannelId = process.env.TARGET_CHANNEL_ID || null; 
+const token = process.env.DISCORD_BOT_TOKEN;  // Koyebで設定
+const targetChannelId = process.env.TARGET_CHANNEL_ID || null;
 const port = process.env.PORT || 3000;
 
-/***********************************************************************
- * 3) Botクライアント作成
- ***********************************************************************/
-const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent
-  ],
-  partials: [Partials.Channel]
-});
-
-/***********************************************************************
- * 4) ローカルデータ (ユーザー情報)
- ***********************************************************************/
 const usersFile = 'users.json';
 let users = {};
 
 if (fs.existsSync(usersFile)) {
   try {
-    const raw = fs.readFileSync(usersFile, 'utf-8');
-    users = JSON.parse(raw);
-  } catch (err) {
-    console.error('Error parsing users.json', err);
+    const data = fs.readFileSync(usersFile, 'utf-8');
+    users = JSON.parse(data);
+  } catch (error) {
+    console.error('Error parsing users.json:', error);
     users = {};
   }
 } else {
@@ -55,57 +35,53 @@ function saveUsers() {
   fs.writeFileSync(usersFile, JSON.stringify(users, null, 2));
 }
 
-/***********************************************************************
- * 5) Bot起動
- ***********************************************************************/
+const client = new Client({
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent
+  ],
+  partials: [Partials.Channel]
+});
+
 client.once('ready', () => {
   console.log(`Bot logged in as ${client.user.tag}`);
 });
 
-/***********************************************************************
- * 6) 監視機能
- ***********************************************************************/
 let isActive = true;
 let monitorInterval = null;
 
 const CHECK_INTERVAL_HOURS = 1;
 const INACTIVE_LIMIT_HOURS = 24;
 
-// ダミー実装: getLastPlayTime
-// ここは実際は riotapi.js 等で "Name#Tag" から取得してください。
-async function getLastPlayTime(riotId) {
-  // ここでは適当に "今から6時間前" と仮定する
-  return new Date(Date.now() - (6 * 60 * 60 * 1000));
-}
-
+/**
+ * 監視タスク:
+ *   users[userId] => "Name#Tag"
+ */
 async function checkInactiveUsers() {
   const now = new Date();
   for (const userId in users) {
     const riotId = users[userId];
-    const lastTime = await getLastPlayTime(riotId);
-    if (!lastTime) {
-      console.log(`User ${userId} (RiotID: ${riotId}) has no play records.`);
+    const lastPlayTime = await getLastPlayTimeFromRiotID(riotId);
+    if (!lastPlayTime) {
+      console.log(`[Check] ${riotId} はまだプレイ記録なし`);
       continue;
     }
-    const diffMs = now - lastTime;
-    const diffHours = diffMs / (1000 * 60 * 60);
-    if (diffHours >= INACTIVE_LIMIT_HOURS) {
+    const diffMs = now - lastPlayTime;
+    const diffH = diffMs / (1000 * 60 * 60);
+    if (diffH >= INACTIVE_LIMIT_HOURS) {
       try {
         if (!targetChannelId) {
-          console.log('No TARGET_CHANNEL_ID, skipping notification.');
+          console.log('No targetChannelId, skipping...');
           continue;
         }
         const channel = await client.channels.fetch(targetChannelId);
         if (!channel) continue;
 
-        // ユーザーを取得 (GuildMember)
         const member = await findMemberById(userId);
-        if (!member) {
-          console.log(`Member not found for userID ${userId}`);
-          continue;
-        }
+        if (!member) continue;
 
-        await channel.send(`${member} さん、もう${INACTIVE_LIMIT_HOURS}時間LOLをしていません！ (RiotID: ${riotId})`);
+        await channel.send(`${member} LOLしろ。お前を見ている。`);
         // 一度通知したら削除
         delete users[userId];
         saveUsers();
@@ -119,18 +95,18 @@ async function checkInactiveUsers() {
 function startMonitoring() {
   if (monitorInterval) return;
   monitorInterval = setInterval(checkInactiveUsers, CHECK_INTERVAL_HOURS * 60 * 60 * 1000);
-  console.log('監視機能オン');
+  console.log('監視機能が有効になりました。');
 }
 
 function stopMonitoring() {
   if (monitorInterval) {
     clearInterval(monitorInterval);
     monitorInterval = null;
-    console.log('監視機能オフ');
+    console.log('監視機能が無効になりました。');
   }
 }
 
-// userId -> GuildMember を探す
+// userId => GuildMember
 async function findMemberById(userId) {
   const user = await client.users.fetch(userId).catch(() => null);
   if (!user) return null;
@@ -141,15 +117,14 @@ async function findMemberById(userId) {
   return null;
 }
 
-/***********************************************************************
- * 7) Slash Command (interactionCreate)
- ***********************************************************************/
-client.on('interactionCreate', async interaction => {
+/**
+ * interactionCreate: スラッシュコマンドが呼ばれた時
+ */
+client.on('interactionCreate', async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
 
   const { commandName } = interaction;
   if (commandName === 'login') {
-    // 監視機能オン
     if (isActive) {
       await interaction.reply('監視機能は既にオンです。');
     } else {
@@ -157,9 +132,8 @@ client.on('interactionCreate', async interaction => {
       startMonitoring();
       await interaction.reply('ピピーッ❗️🔔⚡️LOL脱走兵監視botです❗️👊👮❗️LOLしろ❗️👊');
     }
-
-  } else if (commandName === 'logout') {
-    // 監視機能オフ
+  }
+  else if (commandName === 'logout') {
     if (!isActive) {
       await interaction.reply('監視機能は既にオフです。');
     } else {
@@ -167,31 +141,31 @@ client.on('interactionCreate', async interaction => {
       stopMonitoring();
       await interaction.reply('監視機能をオフにしました。');
     }
+  }
+  else if (commandName === 'rule') {
+    const ruleMsg = `
+**コマンド一覧:**
 
-  } else if (commandName === 'rule') {
-    // ボットの説明
-    const msg = `
-**Botの説明:**
-
-- /login : 監視機能オン
-- /logout : 監視機能オフ
-- /rule : この説明を表示
-- /register <user> <riotid> <tag> : RiotIDを紐づける
-- /check <user> : 最後にLOLをプレイしてからどれくらい経ったか
+- /login ... 監視機能をオン
+- /logout ... 監視機能をオフ
+- /rule ... ボットの説明
+- /register (user) (riotid) (tag) ... RiotIDを登録
+- /check (user) ... 最後にLOLをプレイしてからどれくらい経ったか
 `;
-    await interaction.reply(msg);
-
-  } else if (commandName === 'register') {
-    // /register (user), (riotid), (tag)
+    await interaction.reply(ruleMsg);
+  }
+  else if (commandName === 'register') {
+    // user, riotid, tag
     const user = interaction.options.getUser('user');
     const riotid = interaction.options.getString('riotid');
     const tag = interaction.options.getString('tag');
 
-    // ここで "Name#Tag" としてまとめたり、さらなるバリデーションを行う
     const riotIdFull = `${riotid}#${tag}`;
-
-    // ここで例えば "validateRiotID(riotIdFull)" を呼ぶ
-    // 省略 or ダミー
+    // validate
+    const isValid = await validateRiotID(riotIdFull);
+    if (!isValid) {
+      return interaction.reply(`RiotID「${riotIdFull}」が見つかりませんでした。`);
+    }
     users[user.id] = riotIdFull;
     saveUsers();
 
@@ -200,19 +174,18 @@ client.on('interactionCreate', async interaction => {
     } else {
       await interaction.reply(`${user} さんのRiotIDを「${riotIdFull}」として登録しました。`);
     }
-
-  } else if (commandName === 'check') {
-    // /check (user)
+  }
+  else if (commandName === 'check') {
+    // user
     const user = interaction.options.getUser('user');
     const riotIdFull = users[user.id];
     if (!riotIdFull) {
-      await interaction.reply('まだ登録されていません。 /register で登録してください。');
+      await interaction.reply(`${user} さんは未登録です。/register で登録してください。`);
       return;
     }
-    // 最後のプレイ時間を取得 (ダミー)
-    const lastTime = await getLastPlayTime(riotIdFull);
+    const lastTime = await getLastPlayTimeFromRiotID(riotIdFull);
     if (!lastTime) {
-      await interaction.reply(`${user} さん (RiotID: ${riotIdFull}) はまだプレイ履歴がありません。`);
+      await interaction.reply(`まだプレイ履歴がありません。 (RiotID: ${riotIdFull})`);
       return;
     }
     const now = new Date();
@@ -228,21 +201,23 @@ client.on('interactionCreate', async interaction => {
   }
 });
 
-/***********************************************************************
- * 8) Botログイン
- ***********************************************************************/
+/**
+ * Botログイン
+ */
 client.login(token);
 
-/***********************************************************************
- * 9) 簡易ウェブサーバー
- ***********************************************************************/
+/**
+ * 簡易サーバー for Koyeb
+ */
 const app = express();
 app.get('/', (req, res) => {
-  res.send('Bot is up and running!');
+  res.send('Bot is running with slash commands!');
 });
 app.listen(port, () => {
-  console.log(`HTTP server listening on port ${port}`);
+  console.log(`HTTP server on port ${port}`);
 });
 
-// (オプション) Bot起動時に監視機能開始
+/**
+ * Bot起動時に監視を開始する場合
+ */
 startMonitoring();
