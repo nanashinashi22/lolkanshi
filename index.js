@@ -7,7 +7,7 @@ const { Client, GatewayIntentBits, Partials, PermissionsBitField } = require('di
 const express = require('express');
 const { getLastPlayTime, getSummonerByName } = require('./riotapi'); // Riot API用モジュール
 const fs = require('fs');
-require('dotenv').config(); // 環境変数の読み込み
+
 
 /***********************************************************************
  * 2) 環境変数の読み込み
