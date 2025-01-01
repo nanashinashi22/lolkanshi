@@ -303,7 +303,7 @@ async function checkInactiveUsers() {
                 timeString += `${hours}時間`;
 
                 // メンションで通知
-                await channel.send(`${member} さん、もう${INACTIVE_LIMIT_HOURS}時間LoLを起動していません！LOLしろ！`);
+                await channel.send(`${member} LOLから逃げるな。お前を見ている。`);
 
                 // 一度通知したらユーザーの記録を削除（連続通知を防止）
                 delete users[userId];
