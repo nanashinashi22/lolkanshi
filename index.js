@@ -1,30 +1,34 @@
 /************************************************************
  * index.js
  * 
- * スラッシュコマンドの定義は registerCommands.js 側にある前提。
- * ここでは Bot起動 + interactionCreate + 監視機能 を記述。
- * 
- * コマンド:
- *   /login  (監視オン)
- *   /logout (監視オフ)
- *   /rule   (ボットの説明)
- *   /register (user, riotid, tag)  <-- Tagを含めたRiotID登録
- *   /check (user) <-- LOLプレイ時間確認 (ダミー)
+ * 概要:
+ *  1. /register (user, summonerName) でLoLサモナー名を紐づけ
+ *  2. /check (user) で最新マッチ終了時間をLoL APIから取得し、
+ *     今何時間経過したか計算して返信
+ *  3. /login, /logout, /rule は監視機能のオンオフや説明
+ *  
+ * アプリケーションコマンドはすでに registerCommands.js などで
+ * /login, /logout, /rule, /register, /check を登録済み想定。
  ************************************************************/
 
-const { Client, GatewayIntentBits, Partials } = require('discord.js');
-const express = require('express');
-const fs = require('fs');
+const {
+  Client,
+  GatewayIntentBits,
+  Partials
+} = require('discord.js');
 const axios = require('axios');
+const fs   = require('fs');
+const express = require('express');
 
-// 環境変数 (Koyebで設定)
-const token         = process.env.DISCORD_BOT_TOKEN;
-const riotApiKey    = process.env.RIOT_API_KEY || '';
+
+// ------ 1) Koyebなどの環境変数 ------
+const token      = process.env.DISCORD_BOT_TOKEN;  // Botトークン
+const riotApiKey = process.env.RIOT_API_KEY;       // Riot APIキー (LoL)
 const targetChannelId = process.env.TARGET_CHANNEL_ID || null;
-const guildId       = process.env.GUILD_ID || null;   // 監視用ギルドID (optional)
-const port          = process.env.PORT || 3000;
+const guildId    = process.env.GUILD_ID || null;   // 監視対象Guild ID
+const port       = process.env.PORT || 3000;
 
-// ユーザーデータ ( { [userId]: "RiotID#Tag" } など)
+// ------ 2) データ保存 (users.json) ------
 const usersFile = 'users.json';
 let users = {};
 if (fs.existsSync(usersFile)) {
@@ -38,12 +42,11 @@ if (fs.existsSync(usersFile)) {
 } else {
   fs.writeFileSync(usersFile, JSON.stringify(users, null, 2));
 }
-
 function saveUsers() {
   fs.writeFileSync(usersFile, JSON.stringify(users, null, 2));
 }
 
-// Botクライアント
+// ------ 3) Botクライアント ------
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -53,82 +56,75 @@ const client = new Client({
   partials: [Partials.Channel]
 });
 
-// 監視フラグ
+
+// ------ 4) 監視機能のフラグ & 定数 ------
 let isActive = true;
 let monitorInterval = null;
+const CHECK_INTERVAL_HOURS = 1;      // 1時間毎にチェック
+const INACTIVE_LIMIT_HOURS = 24;    // 24時間以上で警告
 
-const CHECK_INTERVAL_HOURS = 1;
-const INACTIVE_LIMIT_HOURS = 24;
-
-// ダミー: SummonerName or "RiotID#Tag" から最後のプレイ時間を取得
-// 実際は Riot API (LoL or Valorant) を呼ぶ。
-async function getLastPlayTime(riotIdFull) {
-  // ダミーで "4時間前" を返すだけ
-  const fourHoursAgo = new Date(Date.now() - 4 * 60 * 60 * 1000);
-  return fourHoursAgo;
-}
-
-// ユーザーIDからGuildMemberを探す
-async function findMemberById(userId) {
+// ------ 5) LoL SummonerName → 最終プレイ時間を取得する関数群 ------
+/**
+ * SummonerName から PUUID を取得
+ * 日本サーバーなら region = 'jp1'
+ */
+async function getPUUIDfromSummonerName(summonerName) {
+  const region = 'jp1'; // 日本サーバー
+  const url = `https://${region}.api.riotgames.com/lol/summoner/v4/summoners/by-name/${encodeURIComponent(summonerName)}`;
   try {
-    // もし guildId が特定のギルドなら:
-    if (!guildId) return null;
-    const guild = client.guilds.cache.get(guildId);
-    if (!guild) return null;
-    const member = await guild.members.fetch(userId);
-    return member || null;
+    const res = await axios.get(url, {
+      headers: {
+        'X-Riot-Token': riotApiKey
+      }
+    });
+    return res.data.puuid; // SummonerDTO
   } catch (err) {
+    console.error(`getPUUIDfromSummonerName error:`, err.response?.data || err.message);
     return null;
   }
 }
 
-// 監視タスク
-async function checkInactiveUsers() {
-  const now = new Date();
-  for (const userId in users) {
-    const riotIdFull = users[userId];
-    const lastEndTime = await getLastPlayTime(riotIdFull);
-    if (!lastEndTime) {
-      console.log(`[checkInactiveUsers] ${riotIdFull} has no data`);
-      continue;
+/**
+ * PUUID から最新マッチ1件の終了時刻を取得
+ * 例: https://asia.api.riotgames.com/lol/match/v5/matches/by-puuid/{puuid}/ids
+ */
+async function getLastMatchEndTime(puuid) {
+  if (!puuid) return null;
+  const matchRegion = 'asia'; // 日本鯖の場合
+  const matchListUrl = `https://${matchRegion}.api.riotgames.com/lol/match/v5/matches/by-puuid/${puuid}/ids?start=0&count=1`;
+  try {
+    const matchListRes = await axios.get(matchListUrl, {
+      headers: { 'X-Riot-Token': riotApiKey }
+    });
+    if (!matchListRes.data || matchListRes.data.length === 0) {
+      return null; // 試合がない
     }
-    const diffH = (now - lastEndTime) / 3600000;
-    if (diffH >= INACTIVE_LIMIT_HOURS) {
-      try {
-        if (!targetChannelId) continue;
-        const channel = await client.channels.fetch(targetChannelId);
-        if (!channel) continue;
-        const member = await findMemberById(userId);
-        if (!member) continue;
-        await channel.send(`${member} さん、もう${INACTIVE_LIMIT_HOURS}時間LOLしていません！ (RiotID: ${riotIdFull})`);
-        // 通知後ユーザー削除
-        delete users[userId];
-        saveUsers();
-      } catch (err) {
-        console.error('checkInactiveUsers error:', err);
-      }
-    }
+    const matchId = matchListRes.data[0]; // 最新1件
+    // match詳細
+    const detailUrl = `https://${matchRegion}.api.riotgames.com/lol/match/v5/matches/${matchId}`;
+    const detailRes = await axios.get(detailUrl, {
+      headers: { 'X-Riot-Token': riotApiKey }
+    });
+    const gameEndTimestamp = detailRes.data.info.gameEndTimestamp; 
+    return new Date(gameEndTimestamp);
+  } catch (err) {
+    console.error(`getLastMatchEndTime error:`, err.response?.data || err.message);
+    return null;
   }
 }
 
-// 監視ON
-function startMonitoring() {
-  if (monitorInterval) return;
-  monitorInterval = setInterval(checkInactiveUsers, CHECK_INTERVAL_HOURS * 60 * 60 * 1000);
-  console.log('監視機能が有効になりました。');
+/**
+ * SummonerName から「最後の試合終了時刻」を取得
+ */
+async function getLastPlayTime(summonerName) {
+  const puuid = await getPUUIDfromSummonerName(summonerName);
+  if (!puuid) return null; 
+  const endTime = await getLastMatchEndTime(puuid);
+  return endTime; // null or Date
 }
 
-// 監視OFF
-function stopMonitoring() {
-  if (monitorInterval) {
-    clearInterval(monitorInterval);
-    monitorInterval = null;
-    console.log('監視機能が無効になりました。');
-  }
-}
-
-// interactionCreate (slash commands)
-client.on('interactionCreate', async (interaction) => {
+// ------ 6) interactionCreate (SlashCommands) ------
+client.on('interactionCreate', async interaction => {
   if (!interaction.isChatInputCommand()) return;
 
   try {
@@ -154,83 +150,154 @@ client.on('interactionCreate', async (interaction) => {
 
     } else if (commandName === 'rule') {
       const ruleText = `
-**Botの説明:**
+**Botの説明**:
 
-- /login ... 監視オン
-- /logout ... 監視オフ
+- /login ... 監視機能をオン
+- /logout ... 監視機能をオフ
 - /rule ... ボットの説明
-- /register (user, riotid, tag) ... RiotIDを "Name#Tag" 形式で登録
-- /check (user) ... 最後にLOLをプレイしてからどれくらい経ったか
-`;
+- /register (user, summonerName) ... LoLサモナー名を登録
+- /check (user) ... 最後のプレイからどれくらい経ったか
+      `;
       await interaction.reply(ruleText);
 
     } else if (commandName === 'register') {
-      // user, riotid, tag
+      // user, summoner, tag (例: riotid, tag)
       const user = interaction.options.getUser('user');
-      const riotid = interaction.options.getString('riotid');
-      const tag     = interaction.options.getString('tag');
+      const riotid = interaction.options.getString('riotid'); 
+      const tag = interaction.options.getString('tag'); 
+      // Name#Tag
+      const summonerNameFull = `${riotid}#${tag}`; 
+      // もし LoL SummonerName が本来は "Name" のみなら Tag不要
+      // ここではユーザーの希望通り "tag" も保存
 
-      const riotIdFull = `${riotid}#${tag}`;
-      // ここで実際は "validateRiotID" or SummonerName check など
-      users[user.id] = riotIdFull;
+      // SummonerNameとして実際に検索するなら "riotid" だけ使うか、 
+      // or もし SummonerName そのものに #tag は含まれないなら 
+      // SummonerName = riotid (tagは別用途)
+
+      // ここでは "summonerNameFull" を一応保存:
+      users[user.id] = summonerNameFull;
       saveUsers();
 
       if (user.id === interaction.user.id) {
-        await interaction.reply(`あなたのRiotIDを「${riotIdFull}」として登録しました。`);
+        await interaction.reply(`あなたのLoLサモナー名を「${summonerNameFull}」として登録しました。`);
       } else {
-        await interaction.reply(`${user} さんのRiotIDを「${riotIdFull}」として登録しました。`);
+        await interaction.reply(`${user} さんのLoLサモナー名を「${summonerNameFull}」として登録しました。`);
       }
 
     } else if (commandName === 'check') {
       // user
       const user = interaction.options.getUser('user');
-      const riotIdFull = users[user.id];
-      if (!riotIdFull) {
+      const summonerName = users[user.id];
+      if (!summonerName) {
         await interaction.reply(`${user} さんはまだ登録されていません ( /register )`);
         return;
       }
-      const lastTime = await getLastPlayTime(riotIdFull);
-      if (!lastTime) {
-        await interaction.reply(`${user} さん (RiotID: ${riotIdFull}) はプレイ履歴なし。`);
+
+      await interaction.deferReply(); // API呼び出しが時間かかる場合に deferReply
+
+      // Riot API呼び出し
+      const lastEnd = await getLastPlayTime(summonerName);
+      if (!lastEnd) {
+        await interaction.editReply(`${user} さん (SummonerName: ${summonerName}) はまだプレイ履歴がありません。`);
         return;
       }
       const now = new Date();
-      const diffMs = now - lastTime;
-      const diffH = Math.floor(diffMs / 3600000);
+      const diffMs = now - lastEnd;
+      const diffH = Math.floor(diffMs / (1000 * 60 * 60));
       const d = Math.floor(diffH / 24);
       const h = diffH % 24;
       let timeString = '';
       if (d > 0) timeString += `${d}日 `;
       timeString += `${h}時間`;
 
-      await interaction.reply(`${user} さん (RiotID: ${riotIdFull}) は、最後にプレイしてから **${timeString}** 経過しています。`);
+      await interaction.editReply(`${user} さん (SummonerName: ${summonerName}) は、最後の試合終了から **${timeString}** 経過しています。`);
     }
-
   } catch (err) {
     console.error('interactionCreate error:', err);
-    if (interaction.deferred || interaction.replied) {
-      await interaction.editReply('エラーが発生しました。');
-    } else {
-      await interaction.reply({ content: 'エラーが発生しました。', ephemeral: true });
-    }
+    try {
+      if (interaction.deferred || interaction.replied) {
+        await interaction.editReply('エラーが発生しました。');
+      } else {
+        await interaction.reply({ content: 'エラーが発生しました。', ephemeral: true });
+      }
+    } catch {}
   }
 });
 
-// Bot起動
+// ------ 7) 監視タスク (checkInactiveUsers) ------
+async function checkInactiveUsers() {
+  const now = new Date();
+  for (const userId in users) {
+    const summonerName = users[userId];
+    const lastEndTime = await getLastPlayTime(summonerName);
+    if (!lastEndTime) {
+      console.log(`[checkInactiveUsers] ${summonerName} has no match data`);
+      continue;
+    }
+
+    const diffH = (now - lastEndTime) / 3600000;
+    if (diffH >= INACTIVE_LIMIT_HOURS) {
+      try {
+        if (!targetChannelId) continue;
+        const channel = await client.channels.fetch(targetChannelId);
+        if (!channel) continue;
+        const member = await findMemberById(userId);
+        if (!member) continue;
+
+        await channel.send(`${member} さん、もう${INACTIVE_LIMIT_HOURS}時間LoLを起動していません！（Summoner: ${summonerName}）`);
+        // 通知したら削除
+        delete users[userId];
+        saveUsers();
+      } catch (error) {
+        console.error('checkInactiveUsers error:', error);
+      }
+    }
+  }
+}
+
+// 監視開始
+function startMonitoring() {
+  if (monitorInterval) return;
+  monitorInterval = setInterval(checkInactiveUsers, CHECK_INTERVAL_HOURS * 3600000);
+  console.log('監視機能が有効になりました。');
+}
+
+// 監視停止
+function stopMonitoring() {
+  if (monitorInterval) {
+    clearInterval(monitorInterval);
+    monitorInterval = null;
+    console.log('監視機能が無効になりました。');
+  }
+}
+
+// userId -> GuildMember
+async function findMemberById(userId) {
+  try {
+    // 監視対象のguildIdが設定されている場合のみ
+    if (!guildId) return null;
+    const guild = client.guilds.cache.get(guildId);
+    if (!guild) return null;
+    const member = await guild.members.fetch(userId);
+    return member;
+  } catch (err) {
+    return null;
+  }
+}
+
+// ------ 8) Botログイン ------
 client.once('ready', () => {
   console.log(`Bot logged in as ${client.user.tag}`);
   // Bot起動時に監視スタート
   startMonitoring();
 });
 
-// スラッシュコマンドの登録は "registerCommands.js" で実行する前提なので
-// ここでは Bot 本体を起動するだけ
 client.login(token);
 
-// Koyeb用 Web サーバー
+// ------ 9) Webサーバー for Koyeb ------
 const app = express();
 app.get('/', (req, res) => {
-  res.send('Bot is running, with /registerのタグ入力対応!');
+  res.send('Bot running with real LoL Summoner fetch, plus /registerにタグ入力');
 });
 app.listen(port, () => {
   console.log(`HTTP server on port ${port}`);
