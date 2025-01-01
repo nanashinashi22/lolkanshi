@@ -5,13 +5,15 @@
  ***********************************************************************/
 const { Client, GatewayIntentBits, Partials, PermissionsBitField } = require('discord.js');
 const express = require('express');
-const { getLastPlayTime } = require('./riotapi'); // OP.GGからRiot APIへ変更
+const { getLastPlayTime, getSummonerByName } = require('./riotapi'); // Riot API用モジュール
 const fs = require('fs');
+require('dotenv').config(); // 環境変数の読み込み
 
 /***********************************************************************
  * 2) 環境変数の読み込み
  ***********************************************************************/
 const token = process.env.DISCORD_BOT_TOKEN;
+const riotApiKey = process.env.RIOT_API_KEY;
 const targetChannelId = process.env.TARGET_CHANNEL_ID;
 const port = process.env.PORT || 3000;
 
@@ -74,12 +76,13 @@ client.on('messageCreate', async (message) => {
     const command = args.shift().toLowerCase();
 
     if (command === 'register') {
-        // ユーザー登録コマンド: !register @ユーザー <Summoner名>
-        // または !register <Summoner名>
+        // ユーザー登録コマンド: !register @ユーザー <Summoner名#タグ>
+        // または !register <Summoner名#タグ>
         let targetUserId = message.author.id; // デフォルトは自分自身
         let summonerName = '';
+        let tag = '';
 
-        if (args.length >= 2) {
+        if (args.length >= 1) {
             const mentionedUsers = message.mentions.users;
             if (mentionedUsers.size > 0) {
                 // 他ユーザーの登録を制限（例: 管理者のみ）
@@ -90,41 +93,60 @@ client.on('messageCreate', async (message) => {
 
                 const mentionedUser = mentionedUsers.first();
                 targetUserId = mentionedUser.id;
-                summonerName = args.slice(1).join(' ');
+                // Summoner名#タグ を取得
+                const summonerInput = args.slice(1).join(' ');
+                if (!summonerInput) {
+                    message.channel.send('使用方法: !register @ユーザー <Summoner名#タグ> または !register <Summoner名#タグ>');
+                    return;
+                }
+                const [name, tagPart] = summonerInput.split('#');
+                if (!name || !tagPart) {
+                    message.channel.send('Summoner名とタグは「名前#タグ」の形式で入力してください。');
+                    return;
+                }
+                summonerName = name;
+                tag = tagPart;
             } else {
-                // メンションがない場合、コマンドとして無効
-                message.channel.send('使用方法: !register @ユーザー <Summoner名> または !register <Summoner名>');
-                return;
+                // メンションがない場合、自分自身の登録
+                const summonerInput = args.join(' ');
+                const [name, tagPart] = summonerInput.split('#');
+                if (!name || !tagPart) {
+                    message.channel.send('Summoner名とタグは「名前#タグ」の形式で入力してください。');
+                    return;
+                }
+                summonerName = name;
+                tag = tagPart;
             }
-        } else if (args.length === 1) {
-            // 引数が1つの場合は自分自身の登録
-            summonerName = args[0];
         } else {
             // 引数が不足している場合
-            message.channel.send('使用方法: !register @ユーザー <Summoner名> または !register <Summoner名>');
+            message.channel.send('使用方法: !register @ユーザー <Summoner名#タグ> または !register <Summoner名#タグ>');
             return;
         }
 
-        if (!summonerName) {
-            message.channel.send('Summoner名を指定してください。使用方法: !register @ユーザー <Summoner名> または !register <Summoner名>');
+        if (!summonerName || !tag) {
+            message.channel.send('Summoner名とタグを正しく入力してください。使用方法: !register @ユーザー <Summoner名#タグ> または !register <Summoner名#タグ>');
             return;
         }
 
-        // サモナーネームの検証（オプション）
-        const summoner = await getLastPlayTime(summonerName);
-        if (!summoner && summoner !== null) { // nullはプレイしていない場合
-            message.channel.send(`サモナーネーム「${summonerName}」が見つかりませんでした。正しい名前を入力してください。`);
+        // サモナーネームの検証
+        const isValid = await validateSummonerName(summonerName);
+        if (!isValid) {
+            message.channel.send(`サモナーネーム「${summonerName}」が見つかりませんでした。名前とタグを再度確認し、正しい形式（名前#タグ）で入力してください。\n例: !register Nanashinashi22#1234`);
             return;
         }
 
-        users[targetUserId] = summonerName;
+        // ユーザーデータに追加
+        users[targetUserId] = {
+            summonerName: summonerName,
+            tag: tag
+        };
         saveUsers();
 
         // 送信者が自分自身を登録した場合と他ユーザーを登録した場合でメッセージを変える
         if (targetUserId === message.author.id) {
-            message.channel.send(`Summoner名を「${summonerName}」として登録しました。`);
+            message.channel.send(`Summoner名を「${summonerName}#${tag}」として登録しました。`);
         } else {
-            message.channel.send(`${message.mentions.users.first()} さんのSummoner名を「${summonerName}」として登録しました。`);
+            message.channel.send(`${message.mentions.users.first()} さんのSummoner名を「${summonerName}#${tag}」として登録しました。`);
         }
 
     } else if (command === 'check') {
@@ -142,15 +164,17 @@ client.on('messageCreate', async (message) => {
         }
 
         // ユーザー情報の取得
-        const summonerName = users[targetUserId];
-        if (!summonerName) {
+        const userData = users[targetUserId];
+        if (!userData) {
             if (targetUserId === message.author.id) {
-                message.channel.send('まず `!register <Summoner名>` コマンドでSummoner名を登録してください。');
+                message.channel.send('まず `!register <Summoner名#タグ>` コマンドでSummoner名を登録してください。');
             } else {
                 message.channel.send('指定されたユーザーのSummoner名が登録されていません。');
             }
             return;
         }
+
+        const { summonerName, tag } = userData;
 
         // 最後のLoL起動時刻の取得
         const lastPlayTime = await getLastPlayTime(summonerName);
@@ -207,7 +231,20 @@ client.on('messageCreate', async (message) => {
 });
 
 /***********************************************************************
- * 8) 監視機能の管理
+ * サモナーネームの検証関数
+ ***********************************************************************/
+async function validateSummonerName(summonerName) {
+    try {
+        const summoner = await getSummonerByName(summonerName);
+        return summoner !== null;
+    } catch (error) {
+        console.error(`Error validating summoner name (${summonerName}):`, error.response?.data || error.message);
+        return false;
+    }
+}
+
+/***********************************************************************
+ * 監視機能の管理
  ***********************************************************************/
 let isActive = true; // 監視機能が有効かどうか
 let monitorInterval = null; // 監視のインターバルID
@@ -259,7 +296,7 @@ async function checkInactiveUsers() {
     const now = new Date();
 
     for (const userId in users) {
-        const summonerName = users[userId];
+        const { summonerName } = users[userId];
         const lastPlayTime = await getLastPlayTime(summonerName);
 
         if (!lastPlayTime) {
@@ -303,7 +340,7 @@ async function checkInactiveUsers() {
                 timeString += `${hours}時間`;
 
                 // メンションで通知
-                await channel.send(`${member} LOLから逃げるな。お前を見ている。`);
+                await channel.send(`${member} さん、もう${INACTIVE_LIMIT_HOURS}時間LoLを起動していません！LOLしろ！`);
 
                 // 一度通知したらユーザーの記録を削除（連続通知を防止）
                 delete users[userId];
@@ -317,12 +354,12 @@ async function checkInactiveUsers() {
 }
 
 /***********************************************************************
- * 9) 初期監視の開始
+ * 初期監視の開始
  ***********************************************************************/
 startMonitoring();
 
 /***********************************************************************
- * 10) Discord Bot にログイン
+ * Discord Bot にログイン
  ***********************************************************************/
 if (!token) {
     console.error('DISCORD_BOT_TOKEN が設定されていません。環境変数を確認してください。');
@@ -331,7 +368,7 @@ if (!token) {
 client.login(token);
 
 /***********************************************************************
- * 11) Express サーバーを起動
+ * Express サーバーを起動
  ***********************************************************************/
 const app = express();
 app.get('/', (req, res) => {
