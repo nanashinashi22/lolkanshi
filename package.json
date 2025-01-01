@@ -4,13 +4,9 @@
   "description": "Discord Bot + 24h LoL checker, running on Koyeb",
   "main": "index.js",
   "scripts": {
-    //"register" コマンドを追加
+    
     "register": "node registerCommands.js",
-
-    //"build" スクリプトを用意し、register -> (何かビルド処理) -> などを実行
     "build": "npm run register",
-
-    //"start" はBot起動 (npm start で node index.js)
     "start": "node index.js"
   },
   "author": "YourName",
