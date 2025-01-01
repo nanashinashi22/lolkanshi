@@ -1,100 +1,49 @@
 // riotapi.js
-
 const axios = require('axios');
 
 /**
- * Riot APIの設定
+ * 例: 環境変数から取得
+ * Valorant等の実際のエンドポイントに合わせて変更してください
  */
-const RIOT_API_KEY = process.env.RIOT_API_KEY; // 環境変数からAPIキーを取得
-const REGION = 'jp1'; 
+const RIOT_API_KEY = process.env.RIOT_API_KEY;
+const REGION = 'ap'; // Valorantなら "ap" (APAC) など
 const API_BASE_URL = `https://${REGION}.api.riotgames.com`;
 
-
 /**
- * サモナー名からサモナー情報を取得する関数
- * @param {string} summonerName - サモナー名
- * @returns {Object|null} - サモナー情報オブジェクトまたはnull
+ * Riot IDを検証するダミー関数
+ * @param {string} riotId - "Name#Tag" 形式
+ * @returns {boolean} - 例: Riot ID が存在するか
  */
-async function getSummonerByName(summonerName) {
-    try {
-        const response = await axios.get(`${API_BASE_URL}/lol/summoner/v4/summoners/by-name/${encodeURIComponent(summonerName)}`, {
-            headers: {
-                'X-Riot-Token': RIOT_API_KEY
-            }
-        });
-        return response.data;
-    } catch (error) {
-        console.error(`Error fetching summoner by name (${summonerName}):`, error.response?.data || error.message);
-        return null;
-    }
+async function validateRiotID(riotId) {
+  try {
+    // 実際は Valorant API, 例えば /val/account/v1/accounts/by-riot-id/{gameName}/{tagLine} などを呼ぶ
+    // ここではダミーで常に true とする
+    console.log(`(Dummy) Checking if ${riotId} is valid...`);
+    return true;
+  } catch (error) {
+    console.error(`Error validating RiotID (${riotId}):`, error.message);
+    return false;
+  }
 }
 
 /**
- * サモナーIDからマッチリストを取得する関数
- * @param {string} puuid - サモナーのPUUID
- * @param {number} count - 取得するマッチの数（デフォルト: 5）
- * @returns {Array|null} - マッチIDの配列またはnull
+ * Riot IDの最後のプレイ時間を取得するダミー関数
+ * @param {string} riotId - "Name#Tag"
+ * @returns {Date|null} - 最後のプレイ時間、未プレイならnull
  */
-async function getMatchList(puuid, count = 5) {
-    try {
-        const response = await axios.get(`${API_BASE_URL}/lol/match/v5/matches/by-puuid/${puuid}/ids`, {
-            headers: {
-                'X-Riot-Token': RIOT_API_KEY
-            },
-            params: {
-                start: 0,
-                count: count
-            }
-        });
-        return response.data;
-    } catch (error) {
-        console.error(`Error fetching match list for puuid (${puuid}):`, error.response?.data || error.message);
-        return null;
-    }
+async function getLastPlayTimeFromRiotID(riotId) {
+  try {
+    // 実際のAPI呼び出し例 (Valorant):
+    // GET /val/match/v1/matches/by-puuid/{puuid} ...
+    // ここではダミーで、常に今から5時間前を返す
+    console.log(`(Dummy) Fetching last play time for ${riotId}...`);
+    
+    const fiveHoursAgo = new Date(Date.now() - 5 * 60 * 60 * 1000);
+    return fiveHoursAgo;
+  } catch (error) {
+    console.error(`Error fetching last play time for ${riotId}:`, error.message);
+    return null;
+  }
 }
 
-/**
- * マッチIDからマッチ詳細を取得する関数
- * @param {string} matchId - マッチID
- * @returns {Object|null} - マッチ詳細オブジェクトまたはnull
- */
-async function getMatchDetails(matchId) {
-    try {
-        const response = await axios.get(`${API_BASE_URL}/lol/match/v5/matches/${matchId}`, {
-            headers: {
-                'X-Riot-Token': RIOT_API_KEY
-            }
-        });
-        return response.data;
-    } catch (error) {
-        console.error(`Error fetching match details (${matchId}):`, error.response?.data || error.message);
-        return null;
-    }
-}
-
-/**
- * サモナーの最後のプレイ時間を取得する関数
- * @param {string} summonerName - サモナー名
- * @returns {Date|null} - 最後のプレイ時間のDateオブジェクトまたはnull
- */
-async function getLastPlayTime(summonerName) {
-    const summoner = await getSummonerByName(summonerName);
-    if (!summoner) return null;
-
-    const puuid = summoner.puuid;
-    const matchList = await getMatchList(puuid, 1); // 最新のマッチ1件を取得
-    if (!matchList || matchList.length === 0) {
-        console.log(`${summonerName} さんは、まだLoLをプレイしていません。`);
-        return null;
-    }
-
-    const latestMatchId = matchList[0];
-    const matchDetails = await getMatchDetails(latestMatchId);
-    if (!matchDetails) return null;
-
-    const gameEndTimestamp = matchDetails.info.gameEndTimestamp;
-    const gameEndDate = new Date(gameEndTimestamp);
-    return gameEndDate;
-}
-
-module.exports = { getLastPlayTime };
+module.exports = { validateRiotID, getLastPlayTimeFromRiotID };
