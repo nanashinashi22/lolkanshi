@@ -6,9 +6,9 @@ const axios = require('axios');
  * Riot APIの設定
  */
 const RIOT_API_KEY = process.env.RIOT_API_KEY; // 環境変数からAPIキーを取得
-const REGION = 'jp1'; // 使用するリージョンを設定（例: jp1）
-
+const REGION = 'jp1'; 
 const API_BASE_URL = `https://${REGION}.api.riotgames.com`;
+
 
 /**
  * サモナー名からサモナー情報を取得する関数
