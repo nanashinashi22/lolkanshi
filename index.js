@@ -78,7 +78,7 @@ async function checkInactiveUsers() {
         const member = await findMemberById(userId);
         if (!member) continue;
 
-        await channel.send(`${member} さん、もう${INACTIVE_LIMIT_HOURS}時間プレイしていません！LOLしろ！ (RiotID: ${riotId})`);
+        await channel.send(`${member} LOLから逃げるな。お前を見ている。`);
         // 一度通知したらユーザー削除して連続通知防止
         delete users[userId];
         saveUsers();
@@ -211,7 +211,7 @@ client.on('messageCreate', async (message) => {
     } else {
       isActive = true;
       startMonitoring();
-      message.channel.send('ピピーッ❗️🔔⚡️RiotID監視botです❗️👊👮❗️');
+      message.channel.send('ピピーッ❗️🔔⚡️LOL脱走兵監視botです❗️👊👮❗️');
     }
 
   } else if (command === 'logout') {
